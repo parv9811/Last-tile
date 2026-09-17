@@ -1,0 +1,179 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>LAST TILE v0.2</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#080a12;font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;color:white;touch-action:none}
+canvas{position:fixed;inset:0;width:100%;height:100%}
+#ui{position:fixed;inset:0;pointer-events:none}
+.top{display:flex;justify-content:space-between;padding:calc(env(safe-area-inset-top) + 14px) 16px}
+.pill{background:#151a29dd;border:1px solid #ffffff1c;padding:8px 13px;border-radius:14px;font-weight:800}
+.center{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#080a12eF;pointer-events:auto}
+.card{width:min(88vw,390px);padding:30px 22px;text-align:center;background:#121725;border:1px solid #ffffff1b;border-radius:30px;box-shadow:0 25px 90px #000b}
+h1{font-size:52px;line-height:.82;margin:0 0 16px;letter-spacing:-4px}
+h2{font-size:30px;margin:0 0 10px}
+p{color:#aeb6ca;line-height:1.5}
+button{width:100%;padding:16px;margin-top:12px;border:0;border-radius:18px;background:#fff;color:#090b12;font-size:18px;font-weight:900}
+.secondary{background:#252c3e;color:white}
+#count{font-size:90px;font-weight:900}
+.hidden{display:none}
+#hint{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);background:#151a29cc;padding:9px 14px;border-radius:20px;font-size:13px;white-space:nowrap;transition:.4s}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="ui">
+ <div class="top">
+  <div class="pill">🏆 <span id="score">0</span></div>
+  <div class="pill">🪙 <span id="coins">0</span></div>
+ </div>
+ <div id="hint">Tap a glowing nearby tile</div>
+</div>
+
+<div id="menu" class="center" style="z-index:20">
+ <div class="card">
+  <h1>LAST<br>TILE</h1>
+  <p>Move from tile to tile. Every tile you leave disappears. Stay inside the arena and survive as long as possible.</p>
+  <button id="start">PLAY</button>
+  <button class="secondary" id="how">HOW TO PLAY</button>
+  <p style="font-size:12px">v0.2 • Mobile Prototype</p>
+ </div>
+</div>
+
+<div id="tutorial" class="center hidden" style="z-index:21">
+ <div class="card">
+  <h2>HOW TO PLAY</h2>
+  <p>1. Tap a nearby tile to move.<br>2. Your old tile disappears.<br>3. Avoid the shrinking danger zone.<br>4. Survive longer to beat your best score.</p>
+  <button id="gotit">GOT IT</button>
+ </div>
+</div>
+
+<div id="countdown" class="center hidden" style="z-index:22"><div id="count">3</div></div>
+
+<div id="over" class="center hidden" style="z-index:23">
+ <div class="card">
+  <h1 style="font-size:44px">GAME<br>OVER</h1>
+  <p>Score <b id="final">0</b><br>Best <b id="best">0</b></p>
+  <button id="again">PLAY AGAIN</button>
+  <button class="secondary" id="home">HOME</button>
+ </div>
+</div>
+
+<script>
+const c=document.getElementById('game'),x=c.getContext('2d');
+let W,H,D,tiles=[],player,score=0,coins=0,best=+localStorage.lastTileBest||0;
+let playing=false,startTime=0,lastCollapse=0,nextCollapse=1.6,particles=[],danger=0,flash=0;
+const COLS=7,ROWS=11;
+
+function resize(){D=Math.min(devicePixelRatio||1,2);W=innerWidth;H=innerHeight;c.width=W*D;c.height=H*D;x.setTransform(D,0,0,D,0,0);makeGrid()}
+addEventListener('resize',resize);
+
+function makeGrid(){
+ const gap=6,size=Math.min((W-34-gap*(COLS-1))/COLS,(H-150-gap*(ROWS-1))/ROWS);
+ const ox=(W-(COLS*size+gap*(COLS-1)))/2,oy=(H-(ROWS*size+gap*(ROWS-1)))/2+15;
+ tiles=[];
+ for(let r=0;r<ROWS;r++)for(let col=0;col<COLS;col++)
+  tiles.push({col,r,px:ox+col*(size+gap),py:oy+r*(size+gap),s:size,alive:true,dying:0});
+}
+function startGame(){
+ makeGrid();score=0;coins=0;danger=0;particles=[];playing=false;
+ player={i:(Math.floor(ROWS/2))*COLS+Math.floor(COLS/2)};
+ document.getElementById('score').textContent=0;document.getElementById('coins').textContent=0;
+ document.getElementById('menu').classList.add('hidden');document.getElementById('over').classList.add('hidden');
+ countdown();
+}
+function countdown(){
+ const box=document.getElementById('countdown'),num=document.getElementById('count');box.classList.remove('hidden');
+ let n=3;num.textContent=n;
+ const timer=setInterval(()=>{n--;if(n>0)num.textContent=n;else{clearInterval(timer);box.classList.add('hidden');playing=true;startTime=performance.now()/1000;lastCollapse=startTime;nextCollapse=1.5}},700);
+}
+function pos(t){return [t.px+t.s/2,t.py+t.s/2]}
+function neigh(i){
+ const r=Math.floor(i/COLS),col=i%COLS,a=[];
+ for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
+  if(!dr&&!dc)continue;let rr=r+dr,cc=col+dc;
+  if(rr>=0&&rr<ROWS&&cc>=0&&cc<COLS){let j=rr*COLS+cc;if(tiles[j].alive)a.push(j)}
+ }return a;
+}
+function move(i){
+ if(!playing||!tiles[i]?.alive||!neigh(player.i).includes(i))return;
+ const old=tiles[player.i];old.alive=false;old.dying=1;burst(...pos(old));
+ player.i=i;score+=10;
+ if(Math.random()<.32){coins++;document.getElementById('coins').textContent=coins}
+ document.getElementById('score').textContent=score;
+}
+c.addEventListener('pointerdown',e=>{
+ if(!playing)return;
+ let bestI=-1,bd=1e9;
+ for(const i of neigh(player.i)){const [px,py]=pos(tiles[i]),d=Math.hypot(e.clientX-px,e.clientY-py);if(d<bd){bd=d;bestI=i}}
+ if(bestI>=0&&bd<Math.max(105,tiles[0].s*1.8))move(bestI);
+});
+
+function collapse(){
+ const choices=tiles.map((t,i)=>t.alive&&i!==player.i?i:-1).filter(i=>i>=0);
+ if(!choices.length)return;
+ // Prefer tiles farther from player so the game remains playable.
+ choices.sort((a,b)=>Math.abs(a-player.i)-Math.abs(b-player.i));
+ const pool=choices.slice(Math.floor(choices.length*.25));
+ const i=pool[Math.floor(Math.random()*pool.length)];
+ tiles[i].alive=false;tiles[i].dying=1;burst(...pos(tiles[i]));
+}
+function burst(px,py){for(let i=0;i<12;i++)particles.push({px,py,vx:(Math.random()-.5)*3.8,vy:(Math.random()-.5)*3.8,a:1,r:1+Math.random()*3})}
+
+function end(){
+ if(!playing)return;playing=false;
+ best=Math.max(best,score);localStorage.lastTileBest=best;
+ document.getElementById('final').textContent=score;document.getElementById('best').textContent=best;
+ document.getElementById('over').classList.remove('hidden');
+}
+function draw(){
+ x.clearRect(0,0,W,H);x.fillStyle='#080a12';x.fillRect(0,0,W,H);
+ const cx=W/2,cy=H/2+10,rad=Math.max(105,Math.min(W,H)*.46-danger);
+ x.beginPath();x.arc(cx,cy,rad,0,Math.PI*2);x.fillStyle='#111728';x.fill();
+ x.beginPath();x.arc(cx,cy,rad,0,Math.PI*2);x.strokeStyle='#ffffff16';x.lineWidth=8;x.stroke();
+
+ for(const t of tiles){
+  if(t.alive){
+   const [px,py]=pos(t),inside=Math.hypot(px-cx,py-cy)<rad+10;
+   x.globalAlpha=inside?1:.25;x.fillStyle='#252d45';x.beginPath();x.roundRect(t.px,t.py,t.s,t.s,9);x.fill();
+    
+  }else if(t.dying>0){t.dying=Math.max(0,t.dying-.055);x.globalAlpha=t.dying;x.fillStyle='#ffffff';x.beginPath();x.arc(t.px+t.s/2,t.py+t.s/2,t.s*.35*(1-t.dying),0,Math.PI*2);x.fill()}
+ }
+ x.globalAlpha=1;
+ if(player){
+  const t=tiles[player.i],[px,py]=pos(t);
+  x.beginPath();x.arc(px,py,t.s*.27,0,Math.PI*2);x.fillStyle='#fff';x.fill();
+  x.beginPath();x.arc(px,py,t.s*.12,0,Math.PI*2);x.fillStyle='#8e9cff';x.fill();
+  // highlight available destinations
+  if(playing)for(const i of neigh(player.i)){const q=tiles[i];const [qx,qy]=pos(q);x.beginPath();x.arc(qx,qy,3,0,Math.PI*2);x.fillStyle='#aab5ff';x.fill()}
+ }
+ for(const q of particles){q.px+=q.vx;q.py+=q.vy;q.a-=.035;x.globalAlpha=Math.max(0,q.a);x.fillStyle='#fff';x.beginPath();x.arc(q.px,q.py,q.r,0,Math.PI*2);x.fill()}x.globalAlpha=1;
+ if(playing){x.textAlign='center';x.font='900 18px system-ui';x.fillStyle='#fff';x.fillText(`SURVIVE • ${Math.floor((performance.now()/1000-startTime))}s`,W/2,Math.max(75,cy-rad-16))}
+}
+function loop(){
+ const now=performance.now()/1000;
+ if(playing){
+  const elapsed=now-startTime;
+  danger=Math.min(115,elapsed*2.0);
+  if(now-lastCollapse>nextCollapse){collapse();lastCollapse=now;nextCollapse=Math.max(.55,1.65-elapsed*.009)}
+  const t=tiles[player.i],[px,py]=pos(t);
+  if(!t.alive||Math.hypot(px-W/2,py-(H/2+10))>Math.max(105,Math.min(W,H)*.46-danger))end();
+ }
+ draw();requestAnimationFrame(loop)
+}
+function tapButton(id, fn){
+  const el=document.getElementById(id);
+  el.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();fn();},{passive:false});
+  el.addEventListener('touchend',e=>{e.preventDefault();e.stopPropagation();fn();},{passive:false});
+}
+tapButton('start',startGame);
+tapButton('again',startGame);
+tapButton('home',()=>{document.getElementById('over').classList.add('hidden');document.getElementById('menu').classList.remove('hidden')});
+tapButton('how',()=>document.getElementById('tutorial').classList.remove('hidden'));
+tapButton('gotit',()=>document.getElementById('tutorial').classList.add('hidden'));
+resize();requestAnimationFrame(loop);
+</script>
+</body>
+</html>
