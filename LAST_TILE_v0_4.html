@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>LAST TILE</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#070910;color:#fff;font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;touch-action:none}
+canvas{position:fixed;inset:0;width:100%;height:100%}
+#ui{position:fixed;inset:0;pointer-events:none}
+.top{display:flex;justify-content:space-between;padding:calc(env(safe-area-inset-top) + 12px) 14px 0}
+.pill{background:#151a29e8;border:1px solid #ffffff1b;padding:8px 12px;border-radius:14px;font-weight:900}
+#power{position:absolute;left:50%;transform:translateX(-50%);top:calc(env(safe-area-inset-top) + 60px);background:#151a29dd;border:1px solid #ffffff18;padding:7px 12px;border-radius:99px;font-size:12px;font-weight:800}
+#hint{position:absolute;bottom:22px;left:50%;transform:translateX(-50%);background:#151a29dd;padding:9px 14px;border-radius:99px;font-size:13px;white-space:nowrap}
+.center{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#070910ed;z-index:20}
+.card{width:min(88vw,400px);padding:28px 22px;text-align:center;background:#121725;border:1px solid #ffffff1a;border-radius:28px;box-shadow:0 25px 90px #000b}
+h1{font-size:54px;line-height:.82;letter-spacing:-4px;margin:0 0 14px}
+h2{margin:0 0 10px;font-size:30px}
+p{color:#aeb6ca;line-height:1.5}
+button{width:100%;border:0;border-radius:17px;padding:15px;margin-top:10px;font-size:18px;font-weight:900;background:#fff;color:#090b12}
+.alt{background:#252d40;color:#fff}
+.row{display:flex;gap:10px}.row button{flex:1}
+.hidden{display:none!important}
+.stat{display:flex;justify-content:space-between;background:#191f2f;padding:11px 13px;border-radius:13px;margin:7px 0;font-weight:800}
+.swatches{display:flex;justify-content:center;gap:12px;margin:16px 0}
+.swatch{width:42px;height:42px;border-radius:50%;border:3px solid transparent}
+.swatch.sel{border-color:#fff}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="ui">
+ <div class="top"><div class="pill">🏆 <span id="score">0</span></div><div class="pill">🪙 <span id="coins">0</span></div></div>
+ <div id="power">No power-up</div><div id="hint">Tap a nearby tile to move</div>
+</div>
+
+<div id="menu" class="center">
+ <div class="card">
+  <h1>LAST<br>TILE</h1>
+  <p>Every tile you leave disappears. Survive the collapse, collect coins and use power-ups.</p>
+  <button id="play">PLAY</button>
+  <div class="row"><button class="alt" id="skins">SKINS</button><button class="alt" id="missions">MISSIONS</button></div>
+  <p style="font-size:12px">v0.4 • Survival prototype</p>
+ </div>
+</div>
+
+<div id="skinMenu" class="center hidden">
+ <div class="card">
+  <h2>SKINS</h2><p>Choose your player style.</p>
+  <div class="swatches">
+   <button class="swatch sel" data-skin="0" style="background:#fff"></button>
+   <button class="swatch" data-skin="1" style="background:#7d8cff"></button>
+   <button class="swatch" data-skin="2" style="background:#62e6ad"></button>
+   <button class="swatch" data-skin="3" style="background:#ffcb69"></button>
+  </div>
+  <div class="stat"><span>Selected</span><span id="skinName">Classic</span></div>
+  <button class="alt" id="skinBack">BACK</button>
+ </div>
+</div>
+
+<div id="missionMenu" class="center hidden">
+ <div class="card">
+  <h2>MISSIONS</h2>
+  <div class="stat"><span>Survive 20 seconds</span><span id="m1">0/20</span></div>
+  <div class="stat"><span>Collect 10 coins</span><span id="m2">0/10</span></div>
+  <div class="stat"><span>Score 500</span><span id="m3">0/500</span></div>
+  <button class="alt" id="missionBack">BACK</button>
+ </div>
+</div>
+
+<div id="countdown" class="center hidden"><div id="count" style="font-size:90px;font-weight:900">3</div></div>
+
+<div id="over" class="center hidden">
+ <div class="card">
+  <h2>RUN COMPLETE</h2>
+  <p id="resultText">Nice run.</p>
+  <div class="stat"><span>Score</span><span id="finalScore">0</span></div>
+  <div class="stat"><span>Coins</span><span id="finalCoins">0</span></div>
+  <div class="stat"><span>Best</span><span id="best">0</span></div>
+  <button id="again">PLAY AGAIN</button><button class="alt" id="home">HOME</button>
+ </div>
+</div>
+
+<script>
+const c=document.getElementById('game'),ctx=c.getContext('2d');
+let W,H,D,tiles=[],player=null,score=0,coins=0,best=+localStorage.ltBest||0;
+let playing=false,startTime=0,lastCollapse=0,nextCollapse=1.5,danger=0,particles=[];
+let power=null,powerEnd=0,skin=+localStorage.ltSkin||0;
+const COLS=7,ROWS=11,SKIN_NAMES=['Classic','Pulse','Mint','Gold'];
+const COLORS=['#ffffff','#7d8cff','#62e6ad','#ffcb69'];
+
+function resize(){D=Math.min(devicePixelRatio||1,2);W=innerWidth;H=innerHeight;c.width=W*D;c.height=H*D;c.style.width=W+'px';c.style.height=H+'px';makeGrid()}
+addEventListener('resize',resize);
+
+function makeGrid(){
+ const gap=6,size=Math.min((W-34-gap*(COLS-1))/COLS,(H-150-gap*(ROWS-1))/ROWS);
+ const ox=(W-(COLS*size+gap*(COLS-1)))/2,oy=(H-(ROWS*size+gap*(ROWS-1)))/2+15;
+ tiles=[];for(let r=0;r<ROWS;r++)for(let col=0;col<COLS;col++)
+  tiles.push({col,r,px:ox+col*(size+gap),py:oy+r*(size+gap),s:size,alive:true,dying:0,coin:false});
+}
+function pos(t){return[t.px+t.s/2,t.py+t.s/2]}
+function neigh(i){
+ const r=Math.floor(i/COLS),col=i%COLS,a=[];
+ for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++){
+  if(!dr&&!dc)continue;let rr=r+dr,cc=col+dc;
+  if(rr>=0&&rr<ROWS&&cc>=0&&cc<COLS){let j=rr*COLS+cc;if(tiles[j].alive)a.push(j)}
+ }return a;
+}
+function begin(){
+ makeGrid();score=0;coins=0;danger=0;particles=[];power=null;powerEnd=0;
+ player={i:Math.floor(ROWS/2)*COLS+Math.floor(COLS/2)};
+ document.getElementById('score').textContent=0;document.getElementById('coins').textContent=0;
+ document.getElementById('power').textContent='No power-up';
+ ['menu','over'].forEach(id=>document.getElementById(id).classList.add('hidden'));
+ countdown();
+}
+function countdown(){
+ const box=document.getElementById('countdown'),n=document.getElementById('count');box.classList.remove('hidden');
+ let v=3;n.textContent=v;
+ const tm=setInterval(()=>{v--;if(v){n.textContent=v}else{clearInterval(tm);box.classList.add('hidden');playing=true;startTime=performance.now()/1000;lastCollapse=startTime;nextCollapse=1.5}},650);
+}
+function move(i){
+ if(!playing||!tiles[i]?.alive||!neigh(player.i).includes(i))return;
+ const old=tiles[player.i];old.alive=false;old.dying=1;burst(...pos(old));
+ player.i=i;score+=10;
+ if(tiles[i].coin){coins++;tiles[i].coin=false}
+ if(Math.random()<.09)spawnPower();
+ updateHud();
+}
+c.addEventListener('pointerdown',e=>{
+ if(!playing)return;
+ let bi=-1,bd=1e9;
+ for(const i of neigh(player.i)){let [px,py]=pos(tiles[i]),d=Math.hypot(e.clientX-px,e.clientY-py);if(d<bd){bd=d;bi=i}}
+ if(bi>=0&&bd<Math.max(110,tiles[0].s*1.85))move(bi);
+});
+function spawnPower(){
+ const a=tiles.map((t,i)=>t.alive&&i!==player.i?i:-1).filter(i=>i>=0);
+ if(!a.length)return;const i=a[Math.floor(Math.random()*a.length)];
+ tiles[i].coin=true;
+}
+function activatePower(){
+ power='SHIELD';powerEnd=performance.now()/1000+5;document.getElementById('power').textContent='🛡️ SHIELD 5s';
+}
+function collapse(){
+ const a=tiles.map((t,i)=>t.alive&&i!==player.i?i:-1).filter(i=>i>=0);if(!a.length)return;
+ const pool=a.filter(i=>Math.abs(i-player.i)>3);const arr=pool.length?pool:a;
+ const i=arr[Math.floor(Math.random()*arr.length)];
+ tiles[i].alive=false;tiles[i].dying=1;burst(...pos(tiles[i]));
+}
+function burst(px,py){for(let i=0;i<10;i++)particles.push({px,py,vx:(Math.random()-.5)*4,vy:(Math.random()-.5)*4,a:1,r:1+Math.random()*3})}
+function updateHud(){
+ document.getElementById('score').textContent=score;document.getElementById('coins').textContent=coins;
+}
+function end(){
+ if(!playing)return;playing=false;
+ best=Math.max(best,score);localStorage.ltBest=best;
+ const sec=Math.floor(performance.now()/1000-startTime);
+ document.getElementById('finalScore').textContent=score;document.getElementById('finalCoins').textContent=coins;document.getElementById('best').textContent=best;
+ document.getElementById('resultText').textContent=score>=500?'🔥 Mission progress!':`You survived ${sec} seconds.`;
+ document.getElementById('over').classList.remove('hidden');updateMissions(sec);
+}
+function updateMissions(sec){
+ document.getElementById('m1').textContent=Math.min(sec,20)+'/20';
+ document.getElementById('m2').textContent=Math.min(coins,10)+'/10';
+ document.getElementById('m3').textContent=Math.min(score,500)+'/500';
+}
+function draw(){
+ ctx.clearRect(0,0,W,H);ctx.fillStyle='#070910';ctx.fillRect(0,0,W,H);
+ const cx=W/2,cy=H/2+10,rad=Math.max(105,Math.min(W,H)*.46-danger);
+ ctx.beginPath();ctx.arc(cx,cy,rad,0,Math.PI*2);ctx.fillStyle='#111728';ctx.fill();
+ ctx.beginPath();ctx.arc(cx,cy,rad,0,Math.PI*2);ctx.strokeStyle='#ffffff12';ctx.lineWidth=10;ctx.stroke();
+ for(let i=0;i<tiles.length;i++){const t=tiles[i];
+  if(t.alive){let [px,py]=pos(t),inside=Math.hypot(px-cx,py-cy)<rad+12;
+   ctx.globalAlpha=inside?1:.25;ctx.fillStyle='#252d45';ctx.beginPath();ctx.roundRect(t.px,t.py,t.s,t.s,9);ctx.fill();
+   if(t.coin){ctx.globalAlpha=1;ctx.fillStyle='#ffcb69';ctx.beginPath();ctx.arc(px,py,t.s*.14,0,Math.PI*2);ctx.fill()}
+  } else if(t.dying>0){t.dying=Math.max(0,t.dying-.05);ctx.globalAlpha=t.dying;ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(t.px+t.s/2,t.py+t.s/2,t.s*.35*(1-t.dying),0,Math.PI*2);ctx.fill()}
+ }
+ ctx.globalAlpha=1;
+ if(player){const t=tiles[player.i],[px,py]=pos(t),col=COLORS[skin];
+  ctx.shadowBlur=skin?18:10;ctx.shadowColor=col;ctx.beginPath();ctx.arc(px,py,t.s*.27,0,Math.PI*2);ctx.fillStyle=col;ctx.fill();ctx.shadowBlur=0;
+  ctx.beginPath();ctx.arc(px,py,t.s*.11,0,Math.PI*2);ctx.fillStyle=skin===3?'#6f5218':'#10131d';ctx.fill();
+ }
+ for(const q of particles){q.px+=q.vx;q.py+=q.vy;q.a-=.04;ctx.globalAlpha=Math.max(0,q.a);ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(q.px,q.py,q.r,0,Math.PI*2);ctx.fill()}ctx.globalAlpha=1;
+ if(playing){ctx.textAlign='center';ctx.font='900 16px system-ui';ctx.fillStyle='#fff';ctx.fillText('SURVIVE',W/2,Math.max(75,cy-rad-14))}
+}
+function loop(){
+ const now=performance.now()/1000;
+ if(playing){
+  const elapsed=now-startTime;danger=Math.min(115,elapsed*2.0);
+  if(now-lastCollapse>nextCollapse){collapse();lastCollapse=now;nextCollapse=Math.max(.52,1.55-elapsed*.009)}
+  if(power&&now>powerEnd){power=null;document.getElementById('power').textContent='No power-up'}
+  const t=tiles[player.i],[px,py]=pos(t);
+  if(t.coin){activatePower();t.coin=false}
+  if(!t.alive||(!power&&Math.hypot(px-W/2,py-(H/2+10))>Math.max(105,Math.min(W,H)*.46-danger)))end();
+ }
+ draw();requestAnimationFrame(loop)
+}
+function show(id){document.querySelectorAll('.center').forEach(e=>e.classList.add('hidden'));document.getElementById(id).classList.remove('hidden')}
+document.getElementById('play').onclick=begin;
+document.getElementById('again').onclick=begin;
+document.getElementById('home').onclick=()=>show('menu');
+document.getElementById('skins').onclick=()=>{document.getElementById('skinName').textContent=SKIN_NAMES[skin];show('skinMenu')};
+document.getElementById('missions').onclick=()=>{updateMissions(0);show('missionMenu')};
+document.getElementById('skinBack').onclick=()=>show('menu');
+document.getElementById('missionBack').onclick=()=>show('menu');
+document.querySelectorAll('.swatch').forEach(b=>b.onclick=()=>{skin=+b.dataset.skin;localStorage.ltSkin=skin;document.querySelectorAll('.swatch').forEach(q=>q.classList.remove('sel'));b.classList.add('sel');document.getElementById('skinName').textContent=SKIN_NAMES[skin]});
+resize();requestAnimationFrame(loop);
+</script>
+</body>
+</html>
